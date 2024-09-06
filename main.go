@@ -47,6 +47,7 @@ func main() {
 	mux.HandleFunc("POST /v1/users", config.handleCreateUser)
 	mux.HandleFunc("GET /v1/users", config.middlewareAuth(config.handleGetUserByAPI))
 	mux.HandleFunc("POST /v1/feeds", config.middlewareAuth(config.handleCreateFeed))
+	mux.HandleFunc("GET /v1/feeds", config.handleFetchAllFeeds)
 	srv := &http.Server{
 		Addr:    ":" + port,
 		Handler: mux,
@@ -58,6 +59,16 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("server is running on host 127.0.0.1 and port %s\n", port)
+}
+
+func (cfg *apiConfig) handleFetchAllFeeds(w http.ResponseWriter, r *http.Request) {
+	feeds, err := cfg.DB.FetchAllFeeds(r.Context())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "could not fetch feeds")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, feeds)
 }
 
 func (cfg *apiConfig) middlewareAuth(handler authedHandler) http.HandlerFunc {
