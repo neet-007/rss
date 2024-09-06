@@ -22,6 +22,8 @@ type apiConfig struct {
 	DB *database.Queries
 }
 
+type authedHandler func(http.ResponseWriter, *http.Request, database.User)
+
 func main() {
 	godotenv.Load()
 	port := os.Getenv("PORT")
@@ -43,7 +45,8 @@ func main() {
 	mux.HandleFunc("GET /v1/healthz", handleReadiness)
 	mux.HandleFunc("GET /v1/error", handleError)
 	mux.HandleFunc("POST /v1/users", config.handleCreateUser)
-	mux.HandleFunc("GET /v1/users", config.handleGetUserByAPI)
+	mux.HandleFunc("GET /v1/users", config.middlewareAuth(config.handleGetUserByAPI))
+	mux.HandleFunc("POST /v1/feeds", config.middlewareAuth(config.handleCreateFeed))
 	srv := &http.Server{
 		Addr:    ":" + port,
 		Handler: mux,
@@ -57,21 +60,68 @@ func main() {
 	log.Printf("server is running on host 127.0.0.1 and port %s\n", port)
 }
 
-func (cfg *apiConfig) handleGetUserByAPI(w http.ResponseWriter, r *http.Request) {
-	key, err := auth.GetAPIKey(r.Header)
+func (cfg *apiConfig) middlewareAuth(handler authedHandler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		key, err := auth.GetAPIKey(r.Header)
 
+		if err != nil {
+			respondWithError(w, http.StatusUnauthorized, err.Error())
+			return
+		}
+
+		user, err := cfg.DB.GetUserByAPIKey(r.Context(), key)
+
+		if err != nil {
+			respondWithError(w, http.StatusNotFound, "user not found")
+			return
+		}
+
+		handler(w, r, user)
+	}
+}
+
+func (cgf *apiConfig) handleCreateFeed(w http.ResponseWriter, r *http.Request, user database.User) {
+	defer r.Body.Close()
+
+	data, err := io.ReadAll(r.Body)
 	if err != nil {
-		respondWithError(w, http.StatusUnauthorized, err.Error())
+		respondWithError(w, http.StatusBadRequest, "couldnt read body")
 		return
 	}
 
-	user, err := cfg.DB.GetUserByAPIKey(r.Context(), key)
+	params := struct {
+		Name string `json:"name"`
+		Url  string `json:"url"`
+	}{}
 
+	err = json.Unmarshal(data, &params)
 	if err != nil {
-		respondWithError(w, http.StatusNotFound, "user not found")
+		respondWithError(w, http.StatusInternalServerError, "could not unmarshal json")
 		return
 	}
 
+	id := uuid.New()
+	nullUUID := uuid.NullUUID{
+		UUID:  id,
+		Valid: true,
+	}
+	feed, err := cgf.DB.CreateFeed(r.Context(), database.CreateFeedParams{
+		ID:        nullUUID,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+		Name:      params.Name,
+		Url:       params.Url,
+		UserID:    user.ID.UUID,
+	})
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "could not create feed")
+		return
+	}
+
+	respondWithJSON(w, http.StatusCreated, feed)
+}
+
+func (cfg *apiConfig) handleGetUserByAPI(w http.ResponseWriter, r *http.Request, user database.User) {
 	respondWithJSON(w, http.StatusOK, user)
 }
 
