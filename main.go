@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
+	"github.com/neet-007/rss/internal/auth"
 	"github.com/neet-007/rss/internal/database"
 
 	_ "github.com/lib/pq"
@@ -43,6 +43,7 @@ func main() {
 	mux.HandleFunc("GET /v1/healthz", handleReadiness)
 	mux.HandleFunc("GET /v1/error", handleError)
 	mux.HandleFunc("POST /v1/users", config.handleCreateUser)
+	mux.HandleFunc("GET /v1/users", config.handleGetUserByAPI)
 	srv := &http.Server{
 		Addr:    ":" + port,
 		Handler: mux,
@@ -54,6 +55,24 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("server is running on host 127.0.0.1 and port %s\n", port)
+}
+
+func (cfg *apiConfig) handleGetUserByAPI(w http.ResponseWriter, r *http.Request) {
+	key, err := auth.GetAPIKey(r.Header)
+
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	user, err := cfg.DB.GetUserByAPIKey(r.Context(), key)
+
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, user)
 }
 
 func (cfg *apiConfig) handleCreateUser(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +101,7 @@ func (cfg *apiConfig) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		UUID:  id,
 		Valid: true,
 	}
-	user, err := cfg.DB.CreateUser(context.Background(), database.CreateUserParams{
+	user, err := cfg.DB.CreateUser(r.Context(), database.CreateUserParams{
 		ID:        nullUUID,
 		CreatedAt: time.Now().UTC(),
 		UpdatedAt: time.Now().UTC(),
