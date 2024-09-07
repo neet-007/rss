@@ -48,6 +48,9 @@ func main() {
 	mux.HandleFunc("GET /v1/users", config.middlewareAuth(config.handleGetUserByAPI))
 	mux.HandleFunc("POST /v1/feeds", config.middlewareAuth(config.handleCreateFeed))
 	mux.HandleFunc("GET /v1/feeds", config.handleFetchAllFeeds)
+	mux.HandleFunc("DELETE /v1/feed_follows/{feedFollowID}", config.middlewareAuth(config.handleFollowFeedDelete))
+	mux.HandleFunc("GET /v1/feed_follows", config.middlewareAuth(config.handleFollowFeedGet))
+	mux.HandleFunc("POST /v1/feed_follows", config.middlewareAuth(config.handleFollowFeedFollow))
 	srv := &http.Server{
 		Addr:    ":" + port,
 		Handler: mux,
@@ -59,6 +62,67 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("server is running on host 127.0.0.1 and port %s\n", port)
+}
+
+func (cgf *apiConfig) handleFollowFeedGet(w http.ResponseWriter, r *http.Request, user database.User) {
+	feed, err := cgf.DB.GetFeedFollowsForUser(r.Context(), user.ID.UUID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "couldt find feed")
+		return
+	}
+
+	respondWithJSON(w, http.StatusCreated, feed)
+}
+
+func (cfg *apiConfig) handleFollowFeedDelete(w http.ResponseWriter, r *http.Request, user database.User) {
+	feedFollowIDStr := r.PathValue("feedFollowID")
+	feedFollowID, err := uuid.Parse(feedFollowIDStr)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid feed follow ID")
+		return
+	}
+
+	err = cfg.DB.DeleteFeedFollow(r.Context(), database.DeleteFeedFollowParams{UserID: user.ID.UUID, ID: feedFollowID})
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "could not delete feed")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, struct{}{})
+}
+
+func (cgf *apiConfig) handleFollowFeedFollow(w http.ResponseWriter, r *http.Request, user database.User) {
+	defer r.Body.Close()
+
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "couldnt read body")
+		return
+	}
+
+	params := struct {
+		FeedId uuid.UUID `json:"feed_id"`
+	}{}
+
+	err = json.Unmarshal(data, &params)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "could not unmarshal json")
+		return
+	}
+
+	feed, err := cgf.DB.CreateFeedFollow(r.Context(), database.CreateFeedFollowParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+		UserID:    user.ID.UUID,
+		FeedID:    params.FeedId,
+	})
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "could not create feed")
+		return
+	}
+
+	respondWithJSON(w, http.StatusCreated, feed)
 }
 
 func (cfg *apiConfig) handleFetchAllFeeds(w http.ResponseWriter, r *http.Request) {
@@ -124,12 +188,24 @@ func (cgf *apiConfig) handleCreateFeed(w http.ResponseWriter, r *http.Request, u
 		Url:       params.Url,
 		UserID:    user.ID.UUID,
 	})
+
+	feedFollow, err := cgf.DB.CreateFeedFollow(r.Context(), database.CreateFeedFollowParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+		UserID:    user.ID.UUID,
+		FeedID:    feed.ID.UUID,
+	})
+
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "could not create feed")
 		return
 	}
 
-	respondWithJSON(w, http.StatusCreated, feed)
+	respondWithJSON(w, http.StatusCreated, struct {
+		Feed        database.Feed       `json:"feed"`
+		Feed_Follow database.FeedFollow `json:"feed_follow"`
+	}{Feed: feed, Feed_Follow: feedFollow})
 }
 
 func (cfg *apiConfig) handleGetUserByAPI(w http.ResponseWriter, r *http.Request, user database.User) {
